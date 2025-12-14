@@ -1,0 +1,4 @@
+project_id = "hlcldbevlsqtkiavsyny"
+
+[functions.explain-step]
+verify_jwt = false
