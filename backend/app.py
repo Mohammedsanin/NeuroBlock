@@ -1,13 +1,14 @@
 """Flask API server for ML pipeline."""
 
-from flask import Flask, request, jsonify
+import os
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
+from werkzeug.utils import secure_filename
 import pandas as pd
 import io
 import traceback
 from typing import Dict, Any
 from dotenv import load_dotenv
-import os
 
 from ml_pipeline import MLPipeline
 from utils import (
@@ -22,8 +23,19 @@ from ai_explainer import AIExplainer
 # Load environment variables
 load_dotenv()
 
-app = Flask(__name__)
-CORS(app)
+# Initialize Flask app with static file serving
+app = Flask(__name__, 
+            static_folder='../dist',
+            static_url_path='')
+
+# Configure CORS
+CORS(app, resources={
+    r"/api/*": {
+        "origins": "*",
+        "methods": ["GET", "POST", "OPTIONS"],
+        "allow_headers": ["Content-Type"]
+    }
+})
 
 # Store pipeline instances per session (in production, use Redis or similar)
 pipelines: Dict[str, MLPipeline] = {}
@@ -257,6 +269,17 @@ def explain_step():
     except Exception as e:
         traceback.print_exc()
         return jsonify({'error': f'Failed to generate explanation: {str(e)}'}), 500
+
+
+# Serve frontend static files
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def serve_frontend(path):
+    """Serve frontend files or index.html for SPA routing."""
+    if path and os.path.exists(os.path.join(app.static_folder, path)):
+        return send_from_directory(app.static_folder, path)
+    else:
+        return send_from_directory(app.static_folder, 'index.html')
 
 
 if __name__ == '__main__':
