@@ -35,6 +35,7 @@ import { PipelineSaveLoad, PipelineConfig } from "./PipelineSaveLoad";
 import { TutorialWalkthrough } from "./TutorialWalkthrough";
 import { PipelineSuggestions } from "./PipelineSuggestions";
 import neuroBlocksLogo from "@/assets/neuroblocks-logo.png";
+import { trainModel, TrainingResponse, checkHealth } from "@/lib/api";
 
 interface PlacedNode {
   type: BlockType;
@@ -173,6 +174,7 @@ export function PipelineBuilder() {
   });
   const [isTraining, setIsTraining] = useState(false);
   const [showResults, setShowResults] = useState(false);
+  const [trainingResults, setTrainingResults] = useState<TrainingResponse | null>(null);
 
   const placedBlockTypes = useMemo(() => placedNodes.map((n) => n.type), [placedNodes]);
 
@@ -286,8 +288,8 @@ export function PipelineBuilder() {
     toast.info("Pipeline reset");
   }, []);
 
-  // Only require dataset + model - other blocks are optional
-  const canTrain = dataset && selectedModel;
+  // Only require dataset + model + feature selection - other blocks are optional
+  const canTrain = dataset && selectedModel && dataset.inputFeatures && dataset.targetVariable;
   const hasOptionalBlocks = placedBlockTypes.includes("preprocess") || placedBlockTypes.includes("split");
 
   const handleTrain = async () => {
@@ -295,27 +297,78 @@ export function PipelineBuilder() {
       toast.error("Add your data first! 📁");
       return;
     }
+    if (!dataset.inputFeatures || !dataset.targetVariable) {
+      toast.error("Select input features and target variable first! ⚙️");
+      return;
+    }
     if (!selectedModel) {
       toast.error("Pick a model first! 🤖");
       return;
     }
+    if (!dataset.sessionId) {
+      toast.error("Session expired. Please re-upload your dataset.");
+      return;
+    }
+
+    // Check backend health first
+    const isHealthy = await checkHealth();
+    if (!isHealthy) {
+      toast.error("Backend server is not running! Please start it first.");
+      return;
+    }
 
     setIsTraining(true);
-    await new Promise((resolve) => setTimeout(resolve, 2500));
-    setIsTraining(false);
-    setShowResults(true);
-    
-    if (hasOptionalBlocks) {
-      toast.success("Model trained with full pipeline! 🎉");
-    } else {
-      toast.success("Model trained! Add more blocks for better accuracy 💡");
+
+    try {
+      // Prepare training request
+      const trainingRequest = {
+        session_id: dataset.sessionId,
+        input_features: dataset.inputFeatures,
+        target_variable: dataset.targetVariable,
+        preprocessing: {
+          standardization: preprocessing.standardization,
+          normalization: preprocessing.normalization,
+          handle_missing: featureEngineering.handleMissing,
+          missing_strategy: featureEngineering.missingStrategy,
+          encode_categories: featureEngineering.encodeCategories,
+        },
+        split_ratio: splitRatio,
+        model_type: selectedModel,
+        hyperparameters,
+      };
+
+      // Call backend API
+      const results = await trainModel(trainingRequest);
+
+      // Store results
+      setTrainingResults(results);
+      setShowResults(true);
+
+      if (hasOptionalBlocks) {
+        toast.success(`Model trained! Accuracy: ${(results.test_metrics.accuracy * 100).toFixed(1)}% 🎉`);
+      } else {
+        toast.success(`Model trained! Accuracy: ${(results.test_metrics.accuracy * 100).toFixed(1)}% 💡`);
+      }
+    } catch (error: any) {
+      toast.error(error.message || "Training failed. Check backend server.");
+      console.error("Training error:", error);
+    } finally {
+      setIsTraining(false);
     }
   };
 
   const renderDrawerContent = () => {
     switch (activeDrawer) {
       case "dataset":
-        return <DatasetUpload onUpload={setDataset} dataset={dataset} />;
+        return (
+          <DatasetUpload
+            onUpload={setDataset}
+            dataset={dataset}
+            onFeatureTargetSelect={(features, target) => {
+              console.log("Features selected:", features, "Target:", target);
+            }}
+          />
+        );
       case "preprocess":
         return (
           <PreprocessingNode
@@ -410,9 +463,9 @@ export function PipelineBuilder() {
           {/* Logo - Custom NeuroBlocks */}
           <div className="p-5 border-b border-border">
             <div className="flex items-center gap-3">
-              <img 
-                src={neuroBlocksLogo} 
-                alt="NeuroBlocks Logo" 
+              <img
+                src={neuroBlocksLogo}
+                alt="NeuroBlocks Logo"
                 className="w-11 h-11 rounded-xl shadow-md"
               />
               <div>
@@ -435,7 +488,7 @@ export function PipelineBuilder() {
             </div>
 
             {/* Smart Suggestions */}
-            <PipelineSuggestions 
+            <PipelineSuggestions
               placedBlocks={placedBlockTypes}
               onSuggestionClick={(type) => {
                 toast.info(`Drag the ${nodeConfigs[type].title} block to the canvas!`);
@@ -453,7 +506,7 @@ export function PipelineBuilder() {
               <HelpCircle className="w-4 h-4" />
               Show Tutorial
             </button>
-            
+
             <div className="p-4 space-y-2">
               <PipelineSaveLoad
                 nodes={placedNodes}
@@ -510,12 +563,12 @@ export function PipelineBuilder() {
                 Your Pipeline
               </h2>
               <p className="text-sm text-muted-foreground">
-                {placedNodes.length === 0 
-                  ? "Drag blocks here to start" 
+                {placedNodes.length === 0
+                  ? "Drag blocks here to start"
                   : `${placedNodes.length}/6 blocks • Click any block to configure`}
               </p>
             </div>
-            
+
             {/* Train button - More prominent */}
             <Button
               onClick={handleTrain}
@@ -615,16 +668,16 @@ export function PipelineBuilder() {
                 {selectedModel === "logistic"
                   ? "Logistic Regression"
                   : selectedModel === "decision_tree"
-                  ? "Decision Tree"
-                  : selectedModel === "random_forest"
-                  ? "Random Forest"
-                  : selectedModel === "svm"
-                  ? "SVM"
-                  : selectedModel === "knn"
-                  ? "KNN"
-                  : selectedModel === "neural_network"
-                  ? "Neural Network"
-                  : "your model"}
+                    ? "Decision Tree"
+                    : selectedModel === "random_forest"
+                      ? "Random Forest"
+                      : selectedModel === "svm"
+                        ? "SVM"
+                        : selectedModel === "knn"
+                          ? "KNN"
+                          : selectedModel === "neural_network"
+                            ? "Neural Network"
+                            : "your model"}
               </p>
               <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
                 <div
@@ -642,7 +695,7 @@ export function PipelineBuilder() {
         {/* Results Modal */}
         {showResults && !isTraining && (
           <div className="fixed inset-0 bg-background/80 backdrop-blur-sm flex items-center justify-center z-50 p-6">
-            <div className="max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="max-w-6xl w-full max-h-[90vh] overflow-y-auto">
               <ResultsPanel
                 isVisible={showResults}
                 modelType={selectedModel}
@@ -652,16 +705,17 @@ export function PipelineBuilder() {
                   columns: dataset.columns,
                   fileName: dataset.fileName || "dataset.csv",
                 } : undefined}
-                splitRatio={splitRatio}
+                splitRatio={splitRatio / 100}
+                trainingResults={trainingResults}
               />
             </div>
           </div>
         )}
 
         {/* Tutorial Walkthrough */}
-        <TutorialWalkthrough 
-          isOpen={showTutorial} 
-          onComplete={handleTutorialComplete} 
+        <TutorialWalkthrough
+          isOpen={showTutorial}
+          onComplete={handleTutorialComplete}
         />
       </div>
     </DndProvider>

@@ -52,9 +52,10 @@ interface ResultsPanelProps {
   onClose: () => void;
   datasetInfo?: DatasetInfo;
   splitRatio?: number;
+  trainingResults?: any; // Backend training response with predictions
 }
 
-export function ResultsPanel({ isVisible, modelType, onClose, datasetInfo, splitRatio = 0.8 }: ResultsPanelProps) {
+export function ResultsPanel({ isVisible, modelType, onClose, datasetInfo, splitRatio = 0.8, trainingResults }: ResultsPanelProps) {
   const [showComparison, setShowComparison] = useState(false);
   const confettiTriggered = useRef(false);
 
@@ -92,7 +93,7 @@ export function ResultsPanel({ isVisible, modelType, onClose, datasetInfo, split
       confettiTriggered.current = false;
     }
   }, [isVisible]);
-  
+
   // Calculate accurate results based on actual dataset
   const results = useMemo(() => {
     if (!modelType) return null;
@@ -100,7 +101,7 @@ export function ResultsPanel({ isVisible, modelType, onClose, datasetInfo, split
     const totalSamples = datasetInfo?.rows || 847;
     const trainSamples = Math.floor(totalSamples * splitRatio);
     const testSamples = totalSamples - trainSamples;
-    
+
     // Model-specific base performance - Peak accuracy values
     const modelPerformance: Record<string, { acc: number; time: string }> = {
       logistic: { acc: 0.97, time: "0.23s" },
@@ -115,7 +116,7 @@ export function ResultsPanel({ isVisible, modelType, onClose, datasetInfo, split
     const accuracy = config.acc;
     const precision = accuracy - 0.02;
     const recall = accuracy + 0.01;
-    
+
     // Confusion matrix based on test samples
     const truePositives = Math.floor(testSamples * 0.48 * recall);
     const falseNegatives = Math.floor(testSamples * 0.48) - truePositives;
@@ -182,10 +183,10 @@ export function ResultsPanel({ isVisible, modelType, onClose, datasetInfo, split
       const progress = i / 10;
       const trainAcc = Math.min(baseAcc + 2, 50 + progress * (baseAcc - 45));
       const valAcc = Math.min(trainAcc - 2, 48 + progress * (baseAcc - 50));
-      data.push({ 
-        epoch: i, 
-        training: Math.round(trainAcc), 
-        validation: Math.round(valAcc) 
+      data.push({
+        epoch: i,
+        training: Math.round(trainAcc),
+        validation: Math.round(valAcc)
       });
     }
     return data;
@@ -214,6 +215,18 @@ export function ResultsPanel({ isVisible, modelType, onClose, datasetInfo, split
       { name: 'Positive', value: Math.round((classB / total) * 100), color: 'hsl(270, 60%, 60%)' },
     ];
   }, [results]);
+
+  // Actual vs Predicted data - from backend training results
+  const predictionsData = useMemo(() => {
+    if (!trainingResults?.predictions) return [];
+
+    const { actual, predicted } = trainingResults.predictions;
+    return actual.map((actualVal: number, idx: number) => ({
+      index: idx + 1,
+      actual: actualVal,
+      predicted: predicted[idx],
+    })).slice(0, 50); // Show first 50 samples for clarity
+  }, [trainingResults]);
 
   const chartConfig = {
     tpr: { label: 'Model', color: 'hsl(217, 91%, 60%)' },
@@ -253,12 +266,12 @@ export function ResultsPanel({ isVisible, modelType, onClose, datasetInfo, split
           <div>
             <h2 className="font-display text-xl font-bold text-foreground">Training Complete</h2>
             <p className="text-sm text-muted-foreground">
-              {modelType === "logistic" ? "Logistic Regression" : 
-               modelType === "decision_tree" ? "Decision Tree" :
-               modelType === "random_forest" ? "Random Forest" :
-               modelType === "svm" ? "SVM" :
-               modelType === "knn" ? "KNN" :
-               modelType === "neural_network" ? "Neural Network" : "Model"} trained successfully
+              {modelType === "logistic" ? "Logistic Regression" :
+                modelType === "decision_tree" ? "Decision Tree" :
+                  modelType === "random_forest" ? "Random Forest" :
+                    modelType === "svm" ? "SVM" :
+                      modelType === "knn" ? "KNN" :
+                        modelType === "neural_network" ? "Neural Network" : "Model"} trained successfully
             </p>
           </div>
         </div>
@@ -346,7 +359,7 @@ export function ResultsPanel({ isVisible, modelType, onClose, datasetInfo, split
               <p className="text-xs text-muted-foreground mt-1">Out of all predictions, this is the % that were right.</p>
             </TooltipContent>
           </Tooltip>
-          
+
           <Tooltip>
             <TooltipTrigger asChild>
               <div className="p-3 rounded-xl bg-secondary/10 border border-secondary/30 text-center cursor-help">
@@ -361,7 +374,7 @@ export function ResultsPanel({ isVisible, modelType, onClose, datasetInfo, split
               <p className="text-xs text-muted-foreground mt-1">Of all positive predictions, this is the % that were actually positive.</p>
             </TooltipContent>
           </Tooltip>
-          
+
           <Tooltip>
             <TooltipTrigger asChild>
               <div className="p-3 rounded-xl bg-accent/10 border border-accent/30 text-center cursor-help">
@@ -376,7 +389,7 @@ export function ResultsPanel({ isVisible, modelType, onClose, datasetInfo, split
               <p className="text-xs text-muted-foreground mt-1">Of all actual positives, this is the % the model found.</p>
             </TooltipContent>
           </Tooltip>
-          
+
           <Tooltip>
             <TooltipTrigger asChild>
               <div className="p-3 rounded-xl bg-[hsl(var(--model-orange))]/10 border border-[hsl(var(--model-orange))]/30 text-center cursor-help">
@@ -408,9 +421,15 @@ export function ResultsPanel({ isVisible, modelType, onClose, datasetInfo, split
                     <HelpCircle className="w-4 h-4 text-muted-foreground hover:text-foreground transition-colors" />
                   </button>
                 </TooltipTrigger>
-                <TooltipContent className="max-w-[220px]">
-                  <p className="font-medium">How well does the model separate classes?</p>
-                  <p className="text-xs text-muted-foreground mt-1">The curve shows the trade-off between catching positives (y-axis) vs false alarms (x-axis). The bigger the area under the curve (AUC), the better!</p>
+                <TooltipContent className="max-w-[280px]">
+                  <p className="font-medium mb-2">ROC Curve - Model Performance</p>
+                  <p className="text-xs text-muted-foreground mb-2">Shows how well your model distinguishes between classes at different thresholds.</p>
+                  <ul className="text-xs text-muted-foreground space-y-1">
+                    <li>• <strong>Y-axis (TPR):</strong> True Positive Rate - how many actual positives were caught</li>
+                    <li>• <strong>X-axis (FPR):</strong> False Positive Rate - false alarms</li>
+                    <li>• <strong>AUC Score:</strong> Area under curve. 1.0 = perfect, 0.5 = random guessing</li>
+                    <li>• <strong>Diagonal line:</strong> Random classifier baseline</li>
+                  </ul>
                 </TooltipContent>
               </Tooltip>
               <span className="ml-auto text-xs px-2 py-0.5 rounded-full bg-primary/20 text-primary">
@@ -421,8 +440,8 @@ export function ResultsPanel({ isVisible, modelType, onClose, datasetInfo, split
               <AreaChart data={rocData} margin={{ top: 5, right: 5, left: 0, bottom: 5 }}>
                 <defs>
                   <linearGradient id="rocGradient" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="hsl(217, 91%, 60%)" stopOpacity={0.4}/>
-                    <stop offset="95%" stopColor="hsl(217, 91%, 60%)" stopOpacity={0}/>
+                    <stop offset="5%" stopColor="hsl(217, 91%, 60%)" stopOpacity={0.4} />
+                    <stop offset="95%" stopColor="hsl(217, 91%, 60%)" stopOpacity={0} />
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
@@ -446,9 +465,15 @@ export function ResultsPanel({ isVisible, modelType, onClose, datasetInfo, split
                     <HelpCircle className="w-4 h-4 text-muted-foreground hover:text-foreground transition-colors" />
                   </button>
                 </TooltipTrigger>
-                <TooltipContent className="max-w-[220px]">
-                  <p className="font-medium">Which columns matter most?</p>
-                  <p className="text-xs text-muted-foreground mt-1">Shows how much each feature (column) in your data influences the model's predictions. Higher = more important!</p>
+                <TooltipContent className="max-w-[280px]">
+                  <p className="font-medium mb-2">Feature Importance - What Drives Predictions?</p>
+                  <p className="text-xs text-muted-foreground mb-2">Ranks which input features (columns) have the most impact on predictions.</p>
+                  <ul className="text-xs text-muted-foreground space-y-1">
+                    <li>• <strong>Higher bars:</strong> More influential features</li>
+                    <li>• <strong>Lower bars:</strong> Less important features</li>
+                    <li>• Helps identify which data columns are most valuable</li>
+                    <li>• Can guide feature selection for future models</li>
+                  </ul>
                 </TooltipContent>
               </Tooltip>
             </div>
@@ -480,9 +505,15 @@ export function ResultsPanel({ isVisible, modelType, onClose, datasetInfo, split
                     <HelpCircle className="w-4 h-4 text-muted-foreground hover:text-foreground transition-colors" />
                   </button>
                 </TooltipTrigger>
-                <TooltipContent className="max-w-[220px]">
-                  <p className="font-medium">How did the model learn?</p>
-                  <p className="text-xs text-muted-foreground mt-1">Blue line shows training accuracy, green shows test accuracy. If they're close and high, the model learned well!</p>
+                <TooltipContent className="max-w-[280px]">
+                  <p className="font-medium mb-2">Learning Curve - Training Progress</p>
+                  <p className="text-xs text-muted-foreground mb-2">Visualizes how model performance improved during training.</p>
+                  <ul className="text-xs text-muted-foreground space-y-1">
+                    <li>• <strong>Blue line:</strong> Training accuracy (how well it fits training data)</li>
+                    <li>• <strong>Green line:</strong> Validation accuracy (performance on unseen data)</li>
+                    <li>• <strong>Lines close together:</strong> Good generalization</li>
+                    <li>• <strong>Large gap:</strong> May indicate overfitting</li>
+                  </ul>
                 </TooltipContent>
               </Tooltip>
             </div>
@@ -510,9 +541,15 @@ export function ResultsPanel({ isVisible, modelType, onClose, datasetInfo, split
                     <HelpCircle className="w-4 h-4 text-muted-foreground hover:text-foreground transition-colors" />
                   </button>
                 </TooltipTrigger>
-                <TooltipContent className="max-w-[220px]">
-                  <p className="font-medium">Overall model performance</p>
-                  <p className="text-xs text-muted-foreground mt-1">Shows all key metrics at once. A bigger shape means better performance across all measures!</p>
+                <TooltipContent className="max-w-[280px]">
+                  <p className="font-medium mb-2">Performance Radar - Complete Overview</p>
+                  <p className="text-xs text-muted-foreground mb-2">Displays all key performance metrics in one view.</p>
+                  <ul className="text-xs text-muted-foreground space-y-1">
+                    <li>• <strong>Larger shape:</strong> Better overall performance</li>
+                    <li>• <strong>Balanced shape:</strong> Consistent across all metrics</li>
+                    <li>• <strong>Uneven shape:</strong> Strong in some areas, weak in others</li>
+                    <li>• Ideal: Large, symmetrical pentagon</li>
+                  </ul>
                 </TooltipContent>
               </Tooltip>
             </div>
@@ -528,6 +565,90 @@ export function ResultsPanel({ isVisible, modelType, onClose, datasetInfo, split
         </div>
       </TooltipProvider>
 
+      {/* Actual vs Predicted Chart (if predictions available) */}
+      {predictionsData.length > 0 && (
+        <TooltipProvider>
+          <div className="mb-6">
+            <div className="p-4 rounded-xl bg-muted/20 border border-border">
+              <div className="flex items-center gap-2 mb-3">
+                <Target className="w-4 h-4 text-primary" />
+                <span className="text-sm font-medium text-foreground">Actual vs Predicted Values</span>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button className="cursor-help">
+                      <HelpCircle className="w-4 h-4 text-muted-foreground hover:text-foreground transition-colors" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-[280px]">
+                    <p className="font-medium mb-2">Predictions Quality Check</p>
+                    <p className="text-xs text-muted-foreground mb-2">Compares model predictions against actual values from test data.</p>
+                    <ul className="text-xs text-muted-foreground space-y-1">
+                      <li>• <strong>Green line:</strong> Actual values from your dataset</li>
+                      <li>• <strong>Blue line:</strong> Model's predicted values</li>
+                      <li>• <strong>Lines overlap:</strong> Excellent predictions</li>
+                      <li>• <strong>Lines diverge:</strong> Model needs improvement</li>
+                      <li>• Showing first 50 test samples for clarity</li>
+                    </ul>
+                  </TooltipContent>
+                </Tooltip>
+              </div>
+              <ChartContainer config={chartConfig} className="h-[250px] w-full">
+                <LineChart data={predictionsData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                  <XAxis
+                    dataKey="index"
+                    label={{ value: 'Sample Index', position: 'insideBottom', offset: -5, fill: 'hsl(var(--muted-foreground))' }}
+                    tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 10 }}
+                    tickLine={false}
+                  />
+                  <YAxis
+                    label={{ value: 'Value', angle: -90, position: 'insideLeft', fill: 'hsl(var(--muted-foreground))' }}
+                    tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 10 }}
+                    tickLine={false}
+                  />
+                  <ChartTooltip content={<ChartTooltipContent />} />
+                  <ChartLegend content={<ChartLegendContent />} />
+                  <Line
+                    type="monotone"
+                    dataKey="actual"
+                    stroke="hsl(160, 60%, 45%)"
+                    strokeWidth={2}
+                    dot={{ fill: 'hsl(160, 60%, 45%)', r: 3 }}
+                    name="🟢 Actual (Real Data)"
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="predicted"
+                    stroke="hsl(217, 91%, 60%)"
+                    strokeWidth={2}
+                    dot={{ fill: 'hsl(217, 91%, 60%)', r: 3 }}
+                    name="🔵 Predicted (Model Output)"
+                  />
+                </LineChart>
+              </ChartContainer>
+
+              {/* Clear Visual Legend */}
+              <div className="mt-4 grid grid-cols-2 gap-3 text-xs">
+                <div className="flex items-center gap-2 p-3 rounded-lg bg-green-500/10 border border-green-500/30">
+                  <div className="w-4 h-4 rounded-full bg-green-500"></div>
+                  <div>
+                    <p className="font-bold text-foreground">Green Line = Actual Values</p>
+                    <p className="text-muted-foreground">The real values from your dataset</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 p-3 rounded-lg bg-blue-500/10 border border-blue-500/30">
+                  <div className="w-4 h-4 rounded-full bg-blue-500"></div>
+                  <div>
+                    <p className="font-bold text-foreground">Blue Line = Predicted Values</p>
+                    <p className="text-muted-foreground">What the AI model predicted</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </TooltipProvider>
+      )}
+
       {/* Confusion Matrix & Class Distribution */}
       <TooltipProvider>
         <div className="grid md:grid-cols-2 gap-4 mb-6">
@@ -541,30 +662,53 @@ export function ResultsPanel({ isVisible, modelType, onClose, datasetInfo, split
                     <HelpCircle className="w-4 h-4 text-muted-foreground hover:text-foreground transition-colors" />
                   </button>
                 </TooltipTrigger>
-                <TooltipContent className="max-w-[220px]">
-                  <p className="font-medium">How did predictions match reality?</p>
-                  <p className="text-xs text-muted-foreground mt-1">Green = correct predictions (true positives & negatives). Red = mistakes (false positives & negatives).</p>
+                <TooltipContent className="max-w-[280px]">
+                  <p className="font-medium mb-2">Confusion Matrix - Prediction Breakdown</p>
+                  <p className="text-xs text-muted-foreground mb-2">Shows exactly where the model succeeded and failed.</p>
+                  <ul className="text-xs text-muted-foreground space-y-1">
+                    <li>• <strong>Top-left:</strong> True Negatives (correctly predicted negative)</li>
+                    <li>• <strong>Top-right:</strong> False Positives (incorrectly said positive)</li>
+                    <li>• <strong>Bottom-left:</strong> False Negatives (missed positives)</li>
+                    <li>• <strong>Bottom-right:</strong> True Positives (correctly found positives)</li>
+                  </ul>
                 </TooltipContent>
               </Tooltip>
             </div>
-            <div className="grid grid-cols-2 gap-1 w-40 mx-auto">
-              {results.confusionMatrix.flat().map((val, i) => (
-                <div
-                  key={i}
-                  className={cn(
-                    "aspect-square flex items-center justify-center rounded-lg font-bold text-lg",
-                    i === 0 || i === 3
-                      ? "bg-accent/20 text-accent"
-                      : "bg-destructive/20 text-destructive"
-                  )}
-                >
-                  {val}
+            <div className="flex flex-col items-center gap-3">
+              <div className="grid grid-cols-2 gap-2 w-48 mx-auto">
+                {results.confusionMatrix.flat().map((val, i) => (
+                  <div
+                    key={i}
+                    className={cn(
+                      "aspect-square flex flex-col items-center justify-center rounded-lg font-bold text-xl transition-all hover:scale-105",
+                      i === 0 || i === 3
+                        ? "bg-green-500/20 text-green-700 border-2 border-green-500/50"
+                        : "bg-red-500/20 text-red-700 border-2 border-red-500/50"
+                    )}
+                  >
+                    <span className="text-2xl">{val}</span>
+                    <span className="text-[10px] font-normal text-muted-foreground mt-1">
+                      {i === 0 ? "TN" : i === 1 ? "FP" : i === 2 ? "FN" : "TP"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <div className="flex justify-center gap-4 mt-1 text-xs text-muted-foreground">
+                <span>Predicted →</span>
+                <span>Actual ↓</span>
+              </div>
+
+              {/* Legend */}
+              <div className="grid grid-cols-2 gap-2 w-full text-xs mt-3">
+                <div className="p-2 rounded-lg bg-green-500/10 border border-green-500/30">
+                  <p className="font-bold text-green-700">✓ Correct</p>
+                  <p className="text-muted-foreground text-[10px]">TN = True Negative, TP = True Positive</p>
                 </div>
-              ))}
-            </div>
-            <div className="flex justify-center gap-4 mt-2 text-xs text-muted-foreground">
-              <span>Predicted →</span>
-              <span>Actual ↓</span>
+                <div className="p-2 rounded-lg bg-red-500/10 border border-red-500/30">
+                  <p className="font-bold text-red-700">✗ Errors</p>
+                  <p className="text-muted-foreground text-[10px]">FP = False Positive, FN = False Negative</p>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -578,38 +722,44 @@ export function ResultsPanel({ isVisible, modelType, onClose, datasetInfo, split
                     <HelpCircle className="w-4 h-4 text-muted-foreground hover:text-foreground transition-colors" />
                   </button>
                 </TooltipTrigger>
-                <TooltipContent className="max-w-[220px]">
-                  <p className="font-medium">How are your classes split?</p>
-                  <p className="text-xs text-muted-foreground mt-1">Shows the balance between positive and negative classes in your test data. Ideally, they should be roughly equal.</p>
+                <TooltipContent className="max-w-[280px]">
+                  <p className="font-medium mb-2">Class Distribution - Data Balance</p>
+                  <p className="text-xs text-muted-foreground mb-2">Shows the proportion of each class in your test dataset.</p>
+                  <ul className="text-xs text-muted-foreground space-y-1">
+                    <li>• <strong>Balanced (50/50):</strong> Ideal for most models</li>
+                    <li>• <strong>Imbalanced:</strong> One class dominates, may affect accuracy</li>
+                    <li>• Helps explain model behavior and potential biases</li>
+                    <li>• Consider resampling if severely imbalanced</li>
+                  </ul>
                 </TooltipContent>
               </Tooltip>
             </div>
-          <ChartContainer config={chartConfig} className="h-[140px] w-full">
-            <PieChart>
-              <Pie
-                data={classDistribution}
-                cx="50%"
-                cy="50%"
-                innerRadius={35}
-                outerRadius={55}
-                paddingAngle={3}
-                dataKey="value"
-              >
-                {classDistribution.map((entry, index) => (
-                  <Cell key={`cell-${index}`} fill={entry.color} />
-                ))}
-              </Pie>
-              <ChartTooltip content={<ChartTooltipContent />} />
-            </PieChart>
-          </ChartContainer>
-          <div className="flex justify-center gap-4">
-            {classDistribution.map((item, index) => (
-              <div key={index} className="flex items-center gap-2">
-                <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: item.color }} />
-                <span className="text-xs text-muted-foreground">{item.name}: {item.value}%</span>
-              </div>
-            ))}
-          </div>
+            <ChartContainer config={chartConfig} className="h-[140px] w-full">
+              <PieChart>
+                <Pie
+                  data={classDistribution}
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={35}
+                  outerRadius={55}
+                  paddingAngle={3}
+                  dataKey="value"
+                >
+                  {classDistribution.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={entry.color} />
+                  ))}
+                </Pie>
+                <ChartTooltip content={<ChartTooltipContent />} />
+              </PieChart>
+            </ChartContainer>
+            <div className="flex justify-center gap-4">
+              {classDistribution.map((item, index) => (
+                <div key={index} className="flex items-center gap-2">
+                  <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: item.color }} />
+                  <span className="text-xs text-muted-foreground">{item.name}: {item.value}%</span>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       </TooltipProvider>

@@ -2,8 +2,6 @@
 
 A drag-and-drop playground for teaching beginners how end-to-end ML pipelines come together. Users can upload datasets, configure preprocessing, select models, and trigger guided training flows—all inside a vibrant React + Vite experience backed by Supabase Functions for AI explanations.
 
-![NeuroBlocks Dashboard](./public/dashboard.png)
-
 ## ✨ Features
 
 1. **Visual pipeline builder** – Drag dataset, preprocessing, feature engineering, split, model, and results blocks onto the canvas with live status indicators.

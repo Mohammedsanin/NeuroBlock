@@ -3,7 +3,6 @@ import { createPortal } from "react-dom";
 import { HelpCircle, Sparkles, Loader2, X, Lightbulb } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { supabase } from "@/integrations/supabase/client";
 import { BlockType } from "./DraggableBlock";
 import { ParsedData } from "./DatasetUpload";
 
@@ -14,10 +13,10 @@ interface AIHelpTooltipProps {
 }
 
 // Simple, friendly guides for beginners
-const simpleGuides: Record<BlockType, { 
-  title: string; 
+const simpleGuides: Record<BlockType, {
+  title: string;
   whatIs: string;
-  steps: string[]; 
+  steps: string[];
   tip: string;
   emoji: string;
 }> = {
@@ -106,7 +105,7 @@ export function AIHelpTooltip({ stepType, dataset, staticHelp }: AIHelpTooltipPr
         setShowAI(false);
       }
     };
-    
+
     document.addEventListener("keydown", handleEscape);
     return () => document.removeEventListener("keydown", handleEscape);
   }, [isOpen]);
@@ -122,26 +121,34 @@ export function AIHelpTooltip({ stepType, dataset, staticHelp }: AIHelpTooltipPr
     setShowAI(true);
 
     try {
-      const { data, error: fnError } = await supabase.functions.invoke("explain-step", {
-        body: {
+      // Call Python backend instead of Supabase
+      const response = await fetch('http://localhost:5000/api/explain', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
           stepType,
           datasetInfo: dataset
             ? {
-                fileName: dataset.fileName,
-                rows: dataset.rows,
-                columns: dataset.columns,
-                columnTypes: dataset.columnTypes,
-              }
+              fileName: dataset.fileName,
+              rows: dataset.rows,
+              columns: dataset.columns,
+              columnTypes: dataset.columnTypes,
+            }
             : null,
-        },
+        }),
       });
 
-      if (fnError) throw fnError;
-      
+      if (!response.ok) {
+        throw new Error('Failed to fetch explanation');
+      }
+
+      const data = await response.json();
       setExplanation(data.explanation);
     } catch (err: any) {
       console.error("Error fetching explanation:", err);
-      setError("Couldn't load AI explanation.");
+      setError("Couldn't load AI explanation. Make sure the backend is running.");
       setExplanation(staticHelp);
     } finally {
       setIsLoading(false);
@@ -169,11 +176,11 @@ export function AIHelpTooltip({ stepType, dataset, staticHelp }: AIHelpTooltipPr
       {isOpen && createPortal(
         <>
           {/* Backdrop */}
-          <div 
+          <div
             className="fixed inset-0 bg-foreground/20 backdrop-blur-sm z-[100]"
             onClick={() => { setIsOpen(false); setShowAI(false); }}
           />
-          
+
           {/* Modal - simplified and friendly */}
           <div
             className={cn(

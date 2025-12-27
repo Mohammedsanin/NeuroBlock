@@ -1,13 +1,16 @@
 import { useState, useCallback } from "react";
-import { Upload, FileSpreadsheet, AlertCircle, Check, X, Eye, BarChart2 } from "lucide-react";
+import { Upload, FileSpreadsheet, AlertCircle, Check, X, Eye, BarChart2, Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { DataVisualization } from "./DataVisualization";
+import { FeatureTargetSelector } from "./FeatureTargetSelector";
+import { uploadDataset, UploadResponse, ColumnInfo } from "@/lib/api";
 
 interface DatasetUploadProps {
   onUpload: (data: ParsedData | null) => void;
   dataset: ParsedData | null;
+  onFeatureTargetSelect?: (inputFeatures: string[], targetVariable: string) => void;
 }
 
 export interface ParsedData {
@@ -17,53 +20,25 @@ export interface ParsedData {
   columns: string[];
   columnTypes: Record<string, "numeric" | "text" | "categorical">;
   preview: Record<string, string | number>[];
+  sessionId?: string;
+  columnInfo?: Record<string, ColumnInfo>;
+  inputFeatures?: string[];
+  targetVariable?: string;
 }
 
-type ViewMode = "info" | "preview" | "charts";
+type ViewMode = "info" | "preview" | "charts" | "feature-select";
 
-export function DatasetUpload({ onUpload, dataset }: DatasetUploadProps) {
+export function DatasetUpload({ onUpload, dataset, onFeatureTargetSelect }: DatasetUploadProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("info");
   const [selectedColumn, setSelectedColumn] = useState<string | undefined>(undefined);
 
-  const parseCSV = (text: string): Record<string, string | number>[] => {
-    const lines = text.trim().split("\n");
-    const headers = lines[0].split(",").map((h) => h.trim().replace(/"/g, ""));
-    
-    return lines.slice(1, 11).map((line) => {
-      const values = line.split(",").map((v) => v.trim().replace(/"/g, ""));
-      const row: Record<string, string | number> = {};
-      headers.forEach((header, i) => {
-        const val = values[i] || "";
-        row[header] = isNaN(Number(val)) ? val : Number(val);
-      });
-      return row;
-    });
-  };
-
-  const detectColumnTypes = (
-    data: Record<string, string | number>[],
-    columns: string[]
-  ): Record<string, "numeric" | "text" | "categorical"> => {
-    const types: Record<string, "numeric" | "text" | "categorical"> = {};
-    
-    columns.forEach((col) => {
-      const values = data.map((row) => row[col]);
-      const numericCount = values.filter((v) => typeof v === "number").length;
-      const uniqueCount = new Set(values).size;
-      
-      if (numericCount > values.length * 0.8) {
-        types[col] = "numeric";
-      } else if (uniqueCount < values.length * 0.5 && uniqueCount < 10) {
-        types[col] = "categorical";
-      } else {
-        types[col] = "text";
-      }
-    });
-    
-    return types;
+  const formatFileSize = (bytes: number): string => {
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+    return (bytes / (1024 * 1024)).toFixed(1) + " MB";
   };
 
   const handleFile = useCallback(
@@ -78,25 +53,34 @@ export function DatasetUpload({ onUpload, dataset }: DatasetUploadProps) {
       }
 
       try {
-        const text = await file.text();
-        const lines = text.trim().split("\n");
-        const headers = lines[0].split(",").map((h) => h.trim().replace(/"/g, ""));
-        const preview = parseCSV(text);
-        const columnTypes = detectColumnTypes(preview, headers);
+        // Upload to backend
+        const response: UploadResponse = await uploadDataset(file);
+
+        // Convert backend response to ParsedData format
+        const columnTypes: Record<string, "numeric" | "text" | "categorical"> = {};
+        Object.entries(response.column_info).forEach(([col, info]) => {
+          columnTypes[col] = info.type;
+        });
 
         const parsedData: ParsedData = {
-          fileName: file.name,
+          fileName: response.file_name,
           fileSize: formatFileSize(file.size),
-          rows: lines.length - 1,
-          columns: headers,
+          rows: response.rows,
+          columns: response.columns,
           columnTypes,
-          preview,
+          preview: response.preview,
+          sessionId: response.session_id,
+          columnInfo: response.column_info,
         };
 
         onUpload(parsedData);
         toast.success("Dataset uploaded successfully!");
-      } catch (e) {
-        setError("Failed to parse the file. Please check the format.");
+
+        // Automatically show feature selection after upload
+        setViewMode("feature-select");
+      } catch (e: any) {
+        setError(e.message || "Failed to upload file. Make sure the backend server is running.");
+        toast.error("Upload failed. Is the backend server running?");
       } finally {
         setIsLoading(false);
       }
@@ -122,13 +106,49 @@ export function DatasetUpload({ onUpload, dataset }: DatasetUploadProps) {
     [handleFile]
   );
 
-  const formatFileSize = (bytes: number): string => {
-    if (bytes < 1024) return bytes + " B";
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
-    return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+  const handleFeatureTargetConfirm = (inputFeatures: string[], targetVariable: string) => {
+    if (dataset) {
+      const updatedDataset: ParsedData = {
+        ...dataset,
+        inputFeatures,
+        targetVariable,
+      };
+      onUpload(updatedDataset);
+
+      if (onFeatureTargetSelect) {
+        onFeatureTargetSelect(inputFeatures, targetVariable);
+      }
+
+      toast.success(`Selected ${inputFeatures.length} features and target: ${targetVariable}`);
+      setViewMode("info");
+    }
   };
 
+  // Feature Selection View
+  if (dataset && viewMode === "feature-select") {
+    return (
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h4 className="font-medium text-foreground">Select Features & Target</h4>
+          <Button variant="ghost" size="sm" onClick={() => setViewMode("info")}>
+            <X className="w-4 h-4" />
+          </Button>
+        </div>
+
+        <FeatureTargetSelector
+          columns={dataset.columns}
+          columnInfo={dataset.columnInfo || {}}
+          onConfirm={handleFeatureTargetConfirm}
+          onCancel={() => setViewMode("info")}
+        />
+      </div>
+    );
+  }
+
+  // Info View (Dataset uploaded)
   if (dataset && viewMode === "info") {
+    const hasFeatureSelection = dataset.inputFeatures && dataset.targetVariable;
+
     return (
       <div className="space-y-3">
         <div className="flex items-center gap-3 p-3 rounded-xl bg-accent/10 border border-accent/30">
@@ -138,22 +158,42 @@ export function DatasetUpload({ onUpload, dataset }: DatasetUploadProps) {
           <div className="flex-1 min-w-0">
             <p className="font-medium text-foreground truncate">{dataset.fileName}</p>
             <p className="text-xs text-muted-foreground">
-              {dataset.rows} rows • {dataset.columns.length} columns • {dataset.fileSize}
+              {dataset.rows} rows • {dataset.columns.length} columns
             </p>
           </div>
           <Check className="w-5 h-5 text-accent animate-scale-bounce" />
         </div>
 
-        <div className="flex gap-2">
+        {hasFeatureSelection && (
+          <div className="p-3 rounded-lg bg-primary/5 border border-primary/30">
+            <p className="text-sm font-medium text-foreground mb-1">Configuration</p>
+            <p className="text-xs text-muted-foreground">
+              {dataset.inputFeatures!.length} input features → {dataset.targetVariable}
+            </p>
+          </div>
+        )}
+
+        <div className="grid grid-cols-2 gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setViewMode("feature-select")}
+            className={cn(!hasFeatureSelection && "border-primary text-primary")}
+          >
+            <Settings className="w-4 h-4 mr-2" />
+            {hasFeatureSelection ? "Change" : "Select"} Features
+          </Button>
           <Button
             variant="outline"
             size="sm"
             onClick={() => setViewMode("preview")}
-            className="flex-1"
           >
             <Eye className="w-4 h-4 mr-2" />
             Preview
           </Button>
+        </div>
+
+        <div className="flex gap-2">
           <Button
             variant="outline"
             size="sm"
@@ -181,6 +221,7 @@ export function DatasetUpload({ onUpload, dataset }: DatasetUploadProps) {
     );
   }
 
+  // Preview View
   if (dataset && viewMode === "preview") {
     return (
       <div className="space-y-3">
@@ -190,7 +231,7 @@ export function DatasetUpload({ onUpload, dataset }: DatasetUploadProps) {
             <X className="w-4 h-4" />
           </Button>
         </div>
-        
+
         <div className="flex flex-wrap gap-1.5 mb-2">
           {dataset.columns.slice(0, 6).map((col) => (
             <span
@@ -240,6 +281,7 @@ export function DatasetUpload({ onUpload, dataset }: DatasetUploadProps) {
     );
   }
 
+  // Charts View
   if (dataset && viewMode === "charts") {
     return (
       <div className="space-y-3">
@@ -249,7 +291,7 @@ export function DatasetUpload({ onUpload, dataset }: DatasetUploadProps) {
             <X className="w-4 h-4" />
           </Button>
         </div>
-        
+
         <DataVisualization
           dataset={dataset}
           selectedColumn={selectedColumn}
@@ -259,6 +301,7 @@ export function DatasetUpload({ onUpload, dataset }: DatasetUploadProps) {
     );
   }
 
+  // Upload View (No dataset)
   return (
     <div
       onDragOver={(e) => {
@@ -280,8 +323,9 @@ export function DatasetUpload({ onUpload, dataset }: DatasetUploadProps) {
         accept=".csv,.xlsx"
         onChange={handleChange}
         className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+        disabled={isLoading}
       />
-      
+
       <div className="flex flex-col items-center gap-3">
         <div
           className={cn(
@@ -291,10 +335,10 @@ export function DatasetUpload({ onUpload, dataset }: DatasetUploadProps) {
         >
           <Upload className={cn("w-6 h-6", isDragging ? "text-foreground" : "text-muted-foreground")} />
         </div>
-        
+
         <div>
           <p className="font-medium text-foreground">
-            {isDragging ? "Drop your file here" : "Drag your dataset"}
+            {isLoading ? "Uploading..." : isDragging ? "Drop your file here" : "Drag your dataset"}
           </p>
           <p className="text-sm text-muted-foreground mt-1">CSV or Excel format</p>
         </div>
